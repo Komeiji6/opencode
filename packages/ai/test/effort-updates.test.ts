@@ -99,6 +99,34 @@ describe("Anthropic Messages effort updates", () => {
     }),
   )
 
+  it.effect("never sends the thinking-off `none` variant as an effort", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        ai.request({
+          model: anthropic("claude-haiku-5-5"),
+          messages: [
+            Message.user("Off."),
+            Message.effort({ effort: "max", previous: "none" }),
+            Message.user("Max."),
+            Message.effort({ effort: "none", previous: "max" }),
+            Message.user("Off again."),
+            Message.effort({ effort: "low", previous: "none" }),
+            Message.user("Low."),
+          ],
+          providerOptions: { thinking: { type: "adaptive" }, effort: "low" },
+          cache: "none",
+        }),
+      )
+
+      expect(prepared.body.output_config).toBeUndefined()
+      expect(systemMessages(prepared.body).map((message) => message.output_config)).toEqual([
+        { effort: "max" },
+        { effort: "high" },
+        { effort: "low" },
+      ])
+    }),
+  )
+
   it.effect("omits the frozen effort for the model default and sends `high` for a switch back to it", () =>
     Effect.gen(function* () {
       const format = { type: "json_schema" as const, schema: { type: "object" } }

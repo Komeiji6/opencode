@@ -39,6 +39,9 @@ export const PATH = "/messages"
 export const DEFAULT_MAX_TOKENS = 32_000
 const MIN_THINKING_BUDGET = 1_024
 const DEFAULT_EFFORT = "high"
+// Claude has no `none` effort: that variant disables thinking, so a marker recording it carries no effort.
+// A requested `none` is passed through for compatible providers that accept it.
+const anthropicEffort = (effort: string | undefined) => (effort === "none" ? undefined : effort)
 
 const SSE_EVENTS = new Set([
   "message",
@@ -818,7 +821,11 @@ const lowerMessages = Effect.fnUntraced(function* (request: LLMRequest, breakpoi
       const update = effortUpdate(message)
       if (update) {
         // Accepted at any position, so the text-update placement rules do not apply.
-        messages.push({ role: "system", content: [], output_config: { effort: update.effort ?? DEFAULT_EFFORT } })
+        messages.push({
+          role: "system",
+          content: [],
+          output_config: { effort: anthropicEffort(update.effort) ?? DEFAULT_EFFORT },
+        })
         continue
       }
       if (splitsLocalToolResults(request.messages, index))
@@ -956,7 +963,8 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
   const management = options.contextManagement
   const outputConfig = options.output_config ?? options.outputConfig
   const format = outputConfig?.format ?? undefined
-  const updates = resolveEffortUpdates(request, options.effort ?? outputConfig?.effort ?? undefined)
+  const requested = options.effort ?? outputConfig?.effort ?? undefined
+  const updates = resolveEffortUpdates(request, requested)
   // Allocate the 4-breakpoint budget in invalidation order: tools → system →
   // messages. Tools live highest in the cache hierarchy, so when callers
   // over-mark we keep their tool hints and shed the message-tail ones first.
@@ -976,8 +984,8 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
         }))
   const messages = yield* lowerMessages(flattened.request, breakpoints)
   yield* Cache.warnDropped(breakpoints, "Anthropic Messages", ANTHROPIC_BREAKPOINT_CAP)
-  const output_config =
-    updates.effort === undefined && format === undefined ? undefined : { effort: updates.effort, format }
+  const effort = updates.effort === requested ? requested : anthropicEffort(updates.effort)
+  const output_config = effort === undefined && format === undefined ? undefined : { effort, format }
   const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS
   const body = {
     model: request.model.id,
